@@ -1,0 +1,144 @@
+#!/bin/bash
+
+# get directory of this script which is in the scripts directory
+SCRIPT_BASE="$( cd "$( dirname "${BASH_SOURCE[0]}" )" >/dev/null 2>&1 && pwd )" # get the directory of this script in case you want to run it from another directory
+# add ./scripts to this SCRIPT_BASE to get the directory of the scripts
+SCRIPT_DIR="$SCRIPT_BASE/scripts"
+
+# Define an array of scripts in this directory ignoring this script and those in the setup directory. Use FIND
+SCRIPTS=($(ls $SCRIPT_DIR | grep -v $(basename $0) | grep -v "README.md" | grep -v "ignore" | grep -v "example_script"))
+
+# Created online using electronic font https://patorjk.com/software/taag/#p=display&f=Electronic&t=CFN
+echo "Welcome to the AWS CloudFormation script menu!"
+echo -e "===========================================\n"
+echo " ▄▄▄▄▄▄▄▄▄▄▄  ▄▄▄▄▄▄▄▄▄▄▄  ▄▄        ▄"
+echo "▐░░░░░░░░░░░▌▐░░░░░░░░░░░▌▐░░▌      ▐░▌"
+echo "▐░█▀▀▀▀▀▀▀▀▀ ▐░█▀▀▀▀▀▀▀▀▀ ▐░▌░▌     ▐░▌"
+echo "▐░▌          ▐░▌          ▐░▌▐░▌    ▐░▌"
+echo "▐░▌          ▐░█▄▄▄▄▄▄▄▄▄ ▐░▌ ▐░▌   ▐░▌"
+echo "▐░▌          ▐░░░░░░░░░░░▌▐░▌  ▐░▌  ▐░▌"
+echo "▐░▌          ▐░█▀▀▀▀▀▀▀▀▀ ▐░▌   ▐░▌ ▐░▌"
+echo "▐░▌          ▐░▌          ▐░▌    ▐░▌▐░▌"
+echo "▐░█▄▄▄▄▄▄▄▄▄ ▐░▌          ▐░▌     ▐░▐░▌"
+echo "▐░░░░░░░░░░░▌▐░▌          ▐░▌      ▐░░▌"
+echo " ▀▀▀▀▀▀▀▀▀▀▀  ▀            ▀        ▀▀ "
+echo -e "\n"
+
+# --------------------------------------------------------------------------------------------------------------------
+# +++ Functions
+# Function to get the description of the script
+function get_description() {
+  script_name=$1
+  description=$($SCRIPT_DIR/$script_name --help)
+  echo $description
+}
+
+# Function to get the usage of the script preserving the carriage returns
+function get_usage() {
+  script_name=$1
+  usage=$($SCRIPT_DIR/$script_name --usage)
+  echo "$usage"
+}
+
+# Get the maximum length of the script description and script name and store in variables
+max_length_desc=0
+max_length_name=0
+for ((i = 0; i < ${#SCRIPTS[@]}; i++)); do
+  description=$(get_description ${SCRIPTS[$i]})
+  length_desc=${#description}
+  length_names=${#SCRIPTS[$i]}
+
+  if [[ $length_desc -gt $max_length_desc ]]; then
+    max_length_desc=$length_desc
+  fi
+  if [[ $length_names -gt $max_length_name ]]; then
+    max_length_name=$length_names
+  fi
+#echo "Max lengths are: desc >> $max_length_desc and name >> $max_length_name"
+done
+
+# Function to display the script menu
+function display_menu() {
+  # print column headers and separator based on the max length of the script name and description and include an id column
+  printf "%-3s %-$(($max_length_name + 2))s %-$(($max_length_desc + 2))s\n" "ID" "Script Name" "Description"
+  printf "%-3s %-$(($max_length_name + 2))s %-$(($max_length_desc + 2))s\n" "--" "-----------" "-----------"
+  # print the script name, description and id
+  for ((i = 0; i < ${#SCRIPTS[@]}; i++)); do
+    description=$(get_description ${SCRIPTS[$i]})
+    printf "%-3s %-$(($max_length_name + 2))s %-$(($max_length_desc + 2))s\n" "$(($i + 1))" "${SCRIPTS[$i]}" "$description"
+  done
+  echo -e "\nChoose a script and make my day :)"
+}
+
+# Function to execute the selected script
+function execute_script() {
+  script_name=$1
+  choice=$2
+  $script_name $choice
+  exit 0
+}
+
+# Function to execute the selected script and offer choice to use it, validate the choice and show the usage
+function execute_menu_option() {
+  choice=$1
+  if [[ $choice -gt 0 && $choice -le ${#SCRIPTS[@]} ]]; then
+    script_name=${SCRIPTS[$(($choice - 1))]}
+    echo -e ">>> You chose $script_name <<<\n"
+
+    # check if the script can be run as-is and bypass the prompts
+    scripts_to_run_as_is=$(cat $SCRIPT_BASE/run_as_is | tr '\n' ' ') # convert the file contents to a string
+
+    # perform a regex match to see if the script name is in the list of scripts to run as-is
+    if [[ $scripts_to_run_as_is =~ (^|[[:space:]])$script_name($|[[:space:]]) ]]; then
+      echo "Script name: $script_name"
+      echo -e "Executing $script_name as-is\n"
+      execute_script $SCRIPT_DIR/$script_name
+      exit 0
+    else
+      read -p "Do you want to see the usage of this script? (Y/n) " answer
+      if [[ $answer == "y" ]] || [[ $answer == "Y" ]] || [[ $answer == "" ]]; then
+        usage=$(get_usage $script_name)
+        echo -e"\n$usage"
+        read -p "Execute with which option? " choice
+        execute_script $SCRIPT_DIR/$script_name $choice
+      fi
+      exit 0
+    fi
+  else
+    echo "Invalid choice"
+  fi
+}
+
+# --------------------------------------------------------------------------------------------------------------------
+# +++ Payload
+
+function payload {
+  while true; do
+    display_menu
+    echo ""
+    read -p "Enter your choice: " choice
+    execute_menu_option $choice
+  done
+}
+
+# Set the output file path
+output_file="$SCRIPT_BASE/ignore/.prompt_off"
+echo "Output file is: $output_file"
+starter_msg="This is a wrapper script to action other scripts in this directory. See example_script.sh which explains how to contribute. "
+
+# Check if the output file exists
+if [[ ! -e $output_file ]]; then
+  # Output file doesn't exist, display the prompt
+  echo "$starter_msg Press 'n' to turn off this prompt. To enable prompt, delete the file: $output_file"
+  read answer
+else
+  # Output file does exist, display the prompt
+  payload
+fi
+
+# Check the user's answer
+if [[ $answer == "n" ]]; then
+  # User does not want to see the prompt again, create the output file
+  touch $output_file
+  payload
+fi

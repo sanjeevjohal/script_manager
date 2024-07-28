@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+# Function to display description of script
+function show_description() {
+  echo "Open MWAA UI using a token. Run with (qa nonprod int stage prod). Run as-is"
+}
+
+# Function to display help menu
+function show_usage() {
+  #  echo script name without path
+  echo "Usage: ${0##*/} [OPTION]..."
+  echo "====================="
+  echo "Options:"
+  echo "  -h, --help          This can be run without any options"
+  echo "  -v, --version       Show Version"
+}
+
+# Parse command-line options
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    show_description
+    exit 0
+    ;;
+  -u | --usage)
+    show_usage
+    exit 0
+    ;;
+  -v | --version)
+    echo "Version 0.1 - initial version"
+    exit 0
+    ;;
+  *)
+    echo "Unknown option: $1"
+    echo "See '$0 --help' for usage."
+    exit 1
+    ;;
+  esac
+done
+
+# ---- payload
+# valid profiles
+nonprod="sie-cloud-laco-platsvcs-nonprod"
+prod="sie-aws-laco-platsvcs-prod"
+# create an associative array (need bash version 4+) to associate a profile with an environment
+# to reinstall bash on mac: brew install bash && bash --version
+declare -A env
+env["qa"]=$nonprod
+env["dev"]=$nonprod
+env["nonprod"]=$nonprod
+env["int"]=$nonprod
+env["stage"]=$prod
+env["prod"]=$prod
+
+# select a profile
+echo "Select an AWS profile:"
+select profile in $nonprod $prod all; do
+  break
+done
+
+function open_ui() {
+  _env=$1
+  _PROFILE=${env[$_env]}-'zz'-$(whoami)
+  if alb=$(aws --profile $_PROFILE cloudformation describe-stacks --stack-name pde-mwaa-${_env} --query 'Stacks[].Outputs[?OutputKey==`LoadBalancer`].OutputValue' --output text 2>&1); then
+    if _token=$(aws --profile $_PROFILE mwaa create-web-login-token --name pde-mwaa-${_env} --query WebToken --output text 2>&1); then # this is a hack to get the token
+      echo "Got token for $_env now opening UI"
+      open "https://${alb}/aws_mwaa/aws-console-sso?login=true#${_token}"
+    else
+      echo "${_token}"
+    fi
+  else
+    case $? in
+    253) echo "Unable to locate credentials. You can set your profile in AWS_PROFILE or AWS_DEFAULT_PROFILE" ;;
+      #    254) echo "Environment '$_env' is not associated with '$([-z $AWS_PROFILE] && echo $AWS_DEFAULT_PROFILE || echo $AWS_PROFILE)' profile." ;;
+    *) echo ${alb} ;;
+    esac
+  fi
+}
+
+if [[ $profile == "all" ]]; then
+  echo "Getting token and opening UI for all environments"
+  # declare an array to store the keys in the desired order
+  keys=("dev" "qa" "nonprod" "int" "stage" "prod")
+  for _env in "${keys[@]}"; do
+    open_ui "$_env"
+  done
+else
+  # associate the list of environments for the selected profile
+  matching_envs=()
+  echo "Select an environment:"
+  # Iterate over the key-value pairs and print the keys for the matching value
+  for key in "${!env[@]}"; do
+    if [[ "${env[$key]}" = "${profile}" ]]; then
+      matching_envs+=("$key")
+    fi
+  done
+  select _env in "${matching_envs[@]}"; do
+    break
+  done
+  open_ui "$_env"
+fi

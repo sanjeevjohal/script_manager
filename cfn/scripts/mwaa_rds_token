@@ -1,0 +1,82 @@
+#!/bin/bash
+
+# Speed up script by turning off history?
+
+# Function to display description of script
+function show_description() {
+  echo "Generates a token for the specified db env and copies it to the clipboard. Run as-is"
+}
+
+# Function to display help menu
+function show_usage() {
+  #  echo script name without path
+  echo "Usage: ${0##*/} [OPTION]..."
+  echo "====================="
+  echo "Options:"
+  echo "  -h, --help          Show Description"
+  echo "  -v, --version       Show Version"
+  echo "  -hw, --hello-world  Print Hello World"
+}
+
+function hello_world() {
+  echo "Hello World"
+}
+
+# Parse command-line options
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    show_description
+    exit 0
+    ;;
+  -u | --usage)
+    show_usage
+    exit 0
+    ;;
+  -v | --version)
+    echo "Version 0.1 - initial version"
+    exit 0
+    ;;
+  *)
+    echo "Unknown option: $1"
+    echo "See '$0 --help' for usage."
+    exit 1
+    ;;
+  esac
+done
+
+# +++++ payload here +++++
+#[ -z "$1" ] && echo "Please specify the db env!" && exit 2
+# https://github.sie.sony.com/SIE-Private/pde_semantics_db#mysql-client
+
+echo "Please specify the db env!"
+select env in d1 qa dev int nonprod prod stage; do
+  echo "You selected $env ($REPLY)"
+  break
+done
+
+echo "Generating token for $env"
+
+case $env in
+  d1) HOST=pde-semantics-db-d1-cluster.cluster-cdb5tsnf5dk3.us-west-2.rds.amazonaws.com ;;
+  qa) HOST=pde-semantics-db-qa-cluster.cluster-cdb5tsnf5dk3.us-west-2.rds.amazonaws.com ;;
+  dev) HOST=pde-semantics-db-dev-cluster.cluster-cdb5tsnf5dk3.us-west-2.rds.amazonaws.com ;;
+  int) HOST=pde-semantics-db-int-cluster.cluster-cdb5tsnf5dk3.us-west-2.rds.amazonaws.com ;;
+  nonprod) HOST=pde-semantics-db-nonprod-cluster.cluster-cdb5tsnf5dk3.us-west-2.rds.amazonaws.com ;;
+  prod) HOST=pde-semantics-db-prod-cluster.cluster-ro-cztlbktom9k3.us-west-2.rds.amazonaws.com ;;
+  stage) HOST=pde-semantics-db-stage-cluster.cluster-ro-cztlbktom9k3.us-west-2.rds.amazonaws.com ;;
+esac
+
+if [[ $env == "prod" || $env == "stage" ]]; then
+  _profile=sie-aws-laco-platsvcs-prod
+else
+  _profile=sie-cloud-laco-platsvcs-nonprod
+fi
+
+# generate token and pbcopy to clipboard
+_iam="$(whoami)_iam"
+echo "Generating token for $HOST for user ${_iam}"
+_PROFILE=${_profile}-'zz'-$(whoami)
+echo "Using profile: ${_PROFILE}"
+aws --profile ${_PROFILE} rds generate-db-auth-token --hostname $HOST --port 3306 --username $_iam | tr -d '\n' | pbcopy
+echo "Token copied to clipboard"

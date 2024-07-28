@@ -1,0 +1,25 @@
+#!/bin/bash
+
+#set-aws-profile
+
+
+#!/usr/bin/env bash
+
+TOS_FOLDER=s3://sie-content-services-all-prod/prod/master/data/pre_terms_of_sale/ds=latest
+
+while ! aws s3 ls ${TOS_FOLDER}/pre_terms_of_sale.part_00009 > /dev/null; do
+  echo 'No signature file found, waiting...'
+  sleep 300
+done
+
+target_folder() { aws s3 ls ${TOS_FOLDER}/|head -1|cut -d' ' -f1; }
+
+aws s3 sync ${TOS_FOLDER}/ $(target_folder)
+
+# JUST IN CASE WE FOUND ADDITIONAL FILE, OTHERWISE IT'LL KEEP LOOPING UNTIL CANCELLED MANUALLY
+while ! aws s3 ls ${TOS_FOLDER}/pre_terms_of_sale.part_00010 > /dev/null; do
+  echo 'No additional signature file found yet!, waiting...'
+  sleep 300
+done
+
+aws s3 sync ${TOS_FOLDER}/ $(target_folder)

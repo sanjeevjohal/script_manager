@@ -1,0 +1,205 @@
+#!/bin/bash
+
+
+#!/bin/bash
+
+ATHENA_CATALOG=AwsDataCatalog
+target=psn
+env_prefix=cs
+
+THROTTLE_SIZE=10
+THROTTLE_TIME=1
+
+[ -n "${AWS_DEFAULT_REGION}" ] || export AWS_DEFAULT_REGION=us-west-2
+
+case "$ACCOUNT_ID" in
+  207841167519|psp)
+    target=psp
+    ;;
+  578517639677|psn)
+    target=psn
+    ;;
+esac
+
+usage() {
+  cat <<EOM
+$0 - collect the count from athena tables
+Usage:
+    $0 [-h] - this help
+    $0 [-p] - query production Athena tables
+
+        -o [OUTDIR] - temporary output directory
+        -r [AWS_DEFAULT_REGION] - set AWS_DEFAULT_REGION
+        -s [THROTTLE_SIZE] - throttling batch size
+        -t [THROTTLE_TIME] - throttling sleep time (sec)
+
+Note:
+   On EC2 the Athena query submission was too fast and caused S3 TooManyRequestsException
+   Use -s / -t to throttle the query submission
+Where
+    -p: production (default non-production)
+EOM
+}
+
+while getopts ":ho:pr:s:t:" opt; do
+  case $opt in
+    h)
+      usage
+      exit
+      ;;
+    o)
+      OUTDIR=${OPTARG}
+      ;;
+    p)
+      target=psp
+      ;;
+    r)
+      export AWS_DEFAULT_REGION=${OPTARG}
+      ;;
+    s)
+      # On EC2 the Athena query submission was too fast
+      export THROTTLE_SIZE=${OPTARG}
+      ;;
+    t)
+      export THROTTLE_TIME=${OPTARG}
+      ;;
+  esac
+done
+shift $((OPTIND-1))
+
+NOW_TIME=$(date +%Y-%m%d-%H%M%S)
+NOW_DATE=$(date +%Y-%m-%d)
+
+OUTROOT="${HOME}/tmp/scratch"
+OUTPATH="athena/cnt/ds=${NOW_DATE}"
+OUTDIR="${OUTROOT}/${OUTPATH}"
+
+[ ! -d "${OUTDIR}" ] && mkdir -p "${OUTDIR}"
+OUTFILE=${OUTDIR}/$(printf "athena-cnt-%s-%s.tsv" "${target}" "${NOW_TIME}")
+
+case ${target} in
+   psp)
+      . aws-env psp
+      ATHENA_QUERY_OUTPUT=s3://sie-content-services-all-prod/tmp/athena/host-$(hostname -s)/${USER}/
+      REPORT_OUTPUT=s3://sie-content-services-all-prod/${OUTPATH}
+      env_prefix=prod
+      ;;
+    *)
+      . aws-env ${target}
+      ATHENA_QUERY_OUTPUT=s3://pde-asset-nonprod/tmp/athena/host-$(hostname -s)/${USER}/
+      REPORT_OUTPUT=s3://pde-asset-nonprod/${OUTPATH}
+      ;;
+esac
+
+cat <<-EOM
+
+Target: ${target}
+Temporary Output Directory: ${OUTDIR}
+Temporary Output File: ${OUTFILE}
+ATHENA_QUERY_OUTPUT: ${ATHENA_QUERY_OUTPUT}
+REPORT_OUTPUT: ${REPORT_OUTPUT}
+
+EOM
+
+
+fetch_db_list() {
+  aws athena list-databases --catalog-name ${ATHENA_CATALOG} | jq -r '.DatabaseList[].Name | select( . | startswith("'${env_prefix}'"))'
+  # cat list-databases.json
+}
+
+fetch_table_list() {
+    database_name=$1
+    aws athena list-table-metadata --catalog-name ${ATHENA_CATALOG} --database-name ${database_name} \
+      | jq -r '.TableMetadataList[] | select (.TableType == "EXTERNAL_TABLE") | .Name'
+}
+
+make_qry_cnt() {
+    database_name=$1
+    table=$2
+    printf "SELECT CURRENT_TIMESTAMP, COUNT(1) AS cnt FROM %s.%s" ${database_name} ${table}
+}
+
+athena_start_qry() {
+  database_name=$1
+  query_string=$2
+  aws athena start-query-execution --query-execution-context Catalog=${ATHENA_CATALOG},Database=${database_name} \
+    --result-configuration OutputLocation=${ATHENA_QUERY_OUTPUT} \
+    --query-string "${query_string}"
+}
+
+athena_get_query_state() {
+    query_execution_id=$1
+    aws athena get-query-execution --query-execution-id ${query_execution_id} | jq -r '.QueryExecution.Status.State'
+}
+
+athena_wait_qry() {
+    query_execution_id=$1
+    qry_state=$(athena_get_query_state ${query_execution_id})
+    retry=3
+    while [ "${qry_state}" = "RUNNING" -a ${retry} -gt 0 ]; do
+      sleep 6
+      qry_state=$(athena_get_query_state ${query_execution_id})
+      retry=$((retry-1))
+    #   echo retry - $retry
+    done
+    if [ ${retry} -gt 0 ]; then
+      echo ${qry_state}
+    else
+      echo "TIMEOUT"
+    fi
+}
+
+athena_get_result() {
+    query_execution_id=$1
+    aws athena get-query-results --query-execution-id ${query_execution_id} \
+      | jq -r '[ .ResultSet.Rows[-1].Data[].VarCharValue ] | @tsv'
+}
+
+databases=( $(fetch_db_list) )
+db_elem_cnt=${#databases[@]}
+# echo $db_elem_cnt - $databases
+
+#
+# Loop through databases (schemas)
+#
+for (( i=0; i<$db_elem_cnt; i++)); do
+# for (( i=0; i<1; i++)); do
+  database="${databases[$i]}"
+  printf "%d\t%s\n" $i ${database}
+
+  tables=( $(fetch_table_list ${database}) )
+  tables_cnt=${#tables[@]}
+#   echo $tables_cnt - $tables
+
+  queries=()
+  #
+  # Loop through tables to execute the count query
+  #
+  for (( j=0; j<${tables_cnt}; j++ )); do
+    if (( $j%${THROTTLE_SIZE} == 0 )) ; then
+      echo Throttling for $THROTTLE_TIME sec
+      sleep $THROTTLE_TIME
+    fi
+    table=${tables[$j]}
+    qry=$(make_qry_cnt ${database} ${table})
+    qry_id=$( athena_start_qry ${database} "${qry}" | jq -r '.QueryExecutionId' )
+    queries+=( ${qry_id} )
+    printf "%d\t%d\t%s\t%s\t%s\n" $i $j ${database} ${table} ${qry_id}
+  done
+
+  for (( j=0; j<${#queries[@]}; j++ )); do
+    table=${tables[$j]}
+    qry_id=${queries[$j]}
+    # athena_wait_qry ${qry_id}
+    qry_state=$(athena_wait_qry ${qry_id})
+    cnt=-1
+    if [ "$qry_state" = "SUCCEEDED" ]; then
+      cnt=$(athena_get_result ${qry_id})
+    fi
+    printf "%s\t%s\t%s\t%s\t%s\t%s\n" ${database} ${table} ${qry_id} ${qry_state} "${cnt}" "${NOW_DATE}" >> ${OUTFILE}
+  done
+
+done
+
+echo aws s3 sync "${OUTDIR}" "${REPORT_OUTPUT}"
+aws s3 sync "${OUTDIR}" "${REPORT_OUTPUT}"

@@ -1,0 +1,90 @@
+#!/bin/bash
+
+# Function to display description of script
+function show_description() {
+    echo "This shows if a cloud formation stack has drifted from its template and can be used as-is"
+}
+
+# Function to display help menu
+function show_usage() {
+#  echo script name without path
+    echo "Usage: ${0##*/} [OPTION]..."
+    echo "====================="
+    echo "Options:"
+    echo "  -h, --help          This can be run without any options"
+    echo "  -v, --version       Show Version"
+}
+
+# Parse command-line options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_description
+            exit 0
+            ;;
+        -u|--usage)
+            show_usage
+            exit 0
+            ;;
+        -v|--version)
+            echo "Version 0.1 - initial version"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "See '$0 --help' for usage."
+            exit 1
+            ;;
+    esac
+done
+
+# +++++ add payload here +++++
+# Prompt user to select an AWS profile
+echo "Select an AWS profile:"
+select profile in $(grep '\[profile' ~/.aws/config | awk '{print $2}' | tr -d ']'); do
+  break
+done
+
+echo "Selected profile: $profile"
+
+# Function to get stacks by tag (takes a while to run so hardcoded for now)
+function get_stacks_by_tag() {
+  aws cloudformation describe-stacks --profile $profile --query 'Stacks[?contains(Tags[?Key==`service`].Value, `pde-legacy-datalake`)].StackName' --output text
+}
+
+# Create a dictionary of stacks
+#declare -A stacks
+#stacks=([
+#    [non-prod]=hiraku-slo-nonprod
+#    [non-prod]=hiraku-sns-xmatter-nonprod
+#    [non-prod]=pde-asset-nonprod
+#    [non-prod]=hiraku-airflow2-nonprod
+#])
+
+# Prompt user to select a stack
+echo "Select a stack: (takes a while so go get a coffee)"
+select stack_name in $(get_stacks_by_tag); do
+  break
+done
+
+echo "Selected stack: $stack_name"
+
+# Detect stack drift
+output_dir="../ignore"
+aws cloudformation detect-stack-drift --profile $profile --stack-name $stack_name --query 'StackDriftDetectionId' --output text > $output_dir/detection-id.txt
+
+# wait for drift detection to complete
+while true; do
+    driftStatus=$(aws cloudformation describe-stack-drift-detection-status --profile $profile --stack-drift-detection-id $(cat $output_dir/detection-id.txt) --query 'DetectionStatus' --output text)
+    if [[ $driftStatus == "DETECTION_IN_PROGRESS" ]]; then
+      echo "Stack drift detection in progress..."
+      sleep 5
+    else
+      echo "Stack drift detection complete."
+      aws cloudformation describe-stack-resource-drifts --profile $profile --stack-name $stack_name --query 'StackResourceDrifts[].{Resource:LogicalResourceId,DriftStatus:StackResourceDriftStatus}' --output table
+      break
+    fi
+  done
+# +++++ add payload here +++++
+
+

@@ -1,0 +1,56 @@
+#!/bin/bash
+
+# Speed up script by turning off history?
+
+# Function to display description of script
+function show_description() {
+    echo "This is example script"
+}
+
+# Function to display help menu
+function show_usage() {
+#  echo script name without path
+    echo "Usage: ${0##*/} [OPTION]..."
+    echo "====================="
+    echo "Options:"
+    echo "  -h, --help          Show Description"
+    echo "  -v, --version       Show Version"
+    echo "  -hw, --hello-world  Print Hello World"
+}
+
+function hello_world() {
+    echo "Hello World"
+}
+
+# Parse command-line options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_description
+            exit 0
+            ;;
+        -u|--usage)
+            show_usage
+            exit 0
+            ;;
+        -v|--version)
+            echo "Version 0.1 - initial version"
+            exit 0
+            ;;
+        -hw|--hello-world)
+            hello_world
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "See '$0 --help' for usage."
+            exit 1
+            ;;
+    esac
+done
+
+
+# +++++ add payload here +++++
+
+# +++++ add payload here +++++
+

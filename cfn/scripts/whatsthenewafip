@@ -1,0 +1,57 @@
+#!/bin/bash
+
+# Function to display description of script
+function show_description() {
+  echo "This script returns the Airflow IP Address using tag pde-airflow-*. Run as-is"
+}
+
+# Function to display help menu
+function show_usage() {
+  #  echo script name without path
+  echo "Usage: ${0##*/} [OPTION]..."
+  echo "====================="
+  echo "Options:"
+  echo "  -h, --help          Show Description"
+  echo "  -v, --version       Show Version"
+}
+
+function hello_world() {
+  echo "Hello World"
+}
+
+# Parse command-line options
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+  -h | --help)
+    show_description
+    exit 0
+    ;;
+  -u | --usage)
+    show_usage
+    exit 0
+    ;;
+  -v | --version)
+    echo "Version 0.1 - initial version"
+    exit 0
+    ;;
+  *)
+    echo "Unknown option: $1"
+    echo "See '$0 --help' for usage."
+    exit 1
+    ;;
+  esac
+done
+
+# +++++ add payload here +++++
+profiles=$(grep '\[profile' ~/.aws/config | grep -v "sie-cloud-laco-sandbox-nonprod" | grep -v "sie-cloud-laco-cp-prod" | awk '{print $2}' | tr -d ']')
+
+for profile in $profiles; do
+  echo "$profile"
+  if [[ $profile == *"sie-cloud-laco-platsvcs-nonprod"* ]]; then
+    aws ec2 describe-instances --region us-west-2 --profile $profile --filters Name=tag:Name,Values=pde-airflow-nonprod Name=instance-state-name,Values=running --query "Reservations[*].Instances[*].[PrivateIpAddress]" --output table
+  elif [[ $profile == *"sie-aws-laco-platsvcs-prod"* ]]; then
+    aws ec2 describe-instances --region us-west-2 --profile $profile --filters Name=tag:Name,Values=pde-airflow-prod Name=instance-state-name,Values=running --query "Reservations[*].Instances[*].[PrivateIpAddress]" --output table
+  fi
+done
+
+# +++++ add payload here +++++

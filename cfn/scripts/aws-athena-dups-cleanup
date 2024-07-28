@@ -1,0 +1,165 @@
+#!/bin/bash
+
+# Speed up script by turning off history?
+
+# Function to display description of script
+function show_description() {
+    echo "This script scans and generates AWS CLI to delete the duplicate parquet files. Can be run as-is"
+}
+
+# Function to display help menu
+function show_usage() {
+#  echo script name without path
+    echo "Usage: ${0##*/} [OPTION]..."
+    echo "====================="
+    echo "Options:"
+    echo "  -h, --help          Show Description"
+    echo "  -v, --version       Show Version"
+}
+
+
+# Parse command-line options
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        -h|--help)
+            show_description
+            exit 0
+            ;;
+        -u|--usage)
+            show_usage
+            exit 0
+            ;;
+        -v|--version)
+            echo "Version 0.1 - initial version"
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $1"
+            echo "See '$0 --help' for usage."
+            exit 1
+            ;;
+    esac
+done
+
+# ++++++++++++++++++++ PAYLOAD ++++++++++++++++++++
+# Prompt user to select an AWS profile limited to sie-cloud-laco-platsvcs-nonprod and sie-aws-laco-platsvcs-prod
+platsvcs_accounts=("sie-cloud-laco-platsvcs-nonprod" "sie-aws-laco-platsvcs-prod")
+
+# now select an AWS profile limited to these two accounts
+
+
+
+echo "Select an AWS profile (limited to platsvcs accounts):"
+#select profile in $(grep '\[profile' ~/.aws/config | awk '{print $2}' | tr -d ']'); do
+select profile in "${platsvcs_accounts[@]}"; do
+  break
+done
+
+# Add user name to the profile name
+profile="${profile}-zz-$(whoami)"
+echo "Selected profile: $profile"
+
+# Display the selected AWS account
+aws_account=$(aws sts get-caller-identity --profile $profile | jq -r '.Account')
+aws_account_name=${profile%-*-*} # remove the last two parts of the profile name
+echo "Selected account: $aws_account"
+echo "Selected account name: $aws_account_name"
+
+
+if [[  $aws_account_name = 'sie-cloud-laco-platsvcs-nonprod' ]]; then
+  S3_ROOT=s3://sie-content-services-all-nonprod/cs
+else
+  S3_ROOT=s3://sie-content-services-all-prod/prod
+fi
+
+echo "Target s3 bucket: $S3_ROOT"
+
+#alias logging='>&2 echo' # loggingto stderr
+alias dry_run="echo DRY_RUN: "
+DIV_1="===================="
+
+#usage() {
+#    cat<<-EOM
+#$0 - Scans and generates AWS CLI to delete the duplicate parquet files
+#
+#Usage: $0 [-h] [-p]
+#Where:
+#    -h: This help message
+#    -p: Production account
+#
+#Note:
+#1. For safty reasons, the script only generates the AWS S3 CLI that deletes the parquet files but not actually deleting them.
+#
+#2. Before running the script, please make sure the AWS profile is authenticated to access the corresponding S3 bucket
+#
+#3. The S3 delete CLI can be redirected to a separate file and edit later, e.g.
+#   $0 > s3_cmd_file
+#
+#EOM
+#}
+
+#while getopts ":hp" opt; do
+#  case $opt in
+#    h)
+#      usage
+#      exit
+#      ;;
+#    p)
+#      AWS_ENV=psp
+#      S3_ROOT=s3://sie-content-services-all-prod/prod
+#      ;;
+#  esac
+#done
+#shift $((OPTIND-1))
+
+log() {
+#    echo -e "[$(date)] $1"
+    echo -e "$1" >&2
+}
+
+athena_collect_targets() {
+    # returns the list of targets to scan
+    # echo bis blackswan cs_master data_check fma gpdr lockit master ort poe pyspark snow swqa temp_master wws
+    # echo bis
+    aws s3 --profile $profile ls ${S3_ROOT}/|grep '/$'|sed 's#^.*PRE ##;s#/$##'
+} 
+
+athena_target_files() {
+    # list the files in the target
+    local target=$1
+#    log "looking at ${target}/..."
+    aws s3 --profile $profile sync "${target}/" /tmp/fake --dryrun --exclude '*' --include '*ds=latest/*'|grep -v '.spark'|grep '\.parquet$'|cut -c20-|cut -d' ' -f1
+}
+
+athena_check_dups() {
+    local target=$1
+#    log "checking for duplicates in ${target}"
+    # athena_target_files $target | sed -r 's#(s3:.*/data)/([\/a-zA-Z0-9_-]+)/ds=latest/(.*)$#\1 \2#g' |sort -t' ' -k2 | uniq -dcf1
+    athena_target_files $target | sed -r 's#(s3:.*/data)/([\/a-zA-Z0-9_-]+)/ds=latest/(.*)$#\1 \2#g' |sort -t' ' -k2 | uniq -dcf1 | sed 's/^[ \t]*//'  | tr ' ' ','
+}
+
+athena_clean_up() {
+    local cnt=$1
+    local s3_prefix=$2
+    local entity=$3
+
+    log ${DIV_1}
+    log "There are ${cnt} duplicate parquet files for ${entity}"
+    log "aws s3 --profile $profile ls ${s3_prefix}/${entity}/ds=latest/"
+    parquet_files=$(aws s3 --profile $profile ls ${s3_prefix}/${entity}/ds=latest/)
+    log "${parquet_files}"
+    file_to_delete=$(echo "${parquet_files}" | grep -v "${entity}.snappy.parquet" | sed 's/^.* //')
+    log ${DIV_1}
+    dry_run aws s3 --profile $profile rm "${s3_prefix}/${entity}/ds=latest/${file_to_delete}"
+}
+
+for i in $(athena_collect_targets); do
+    log "Scanning ${i}..."
+    target="${S3_ROOT}/${i}/data"
+    # athena_target_files $target | sed -r 's#(s3:.*/data)/([\/a-zA-Z0-9_-]+)/ds=latest/(.*)$#\1 \2#g'|sort -t' ' -k2|uniq -dcf1|sort -nr
+    dups=$(athena_check_dups $target)
+    for j in ${dups}; do
+        jj=$(echo $j | tr ',' ' ')
+        athena_clean_up $jj
+    done
+done
